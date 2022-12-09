@@ -14,32 +14,39 @@ import ./globals
 import protocol/udpTrackerStruct
 import binarylang
 
-template pingPong(pingTempl, pongTempl: untyped) {.dirty.} =
-  var pingStr = newStringBitStream()
-  pingTempl.put(pingStr, ping); pingStr.setPosition(0)
+template udpTrackerPing(pingTempl: untyped) {.dirty.} =
+  var pingStr = newStringBitStream(); pingTempl.put(pingStr, ping); pingStr.setPosition(0)
   discard await socket.sendTo(tracker.hostname, Port(parseInt(tracker.port)), pingStr.readAll()).withTimeout(1500)
+
+template udpTrackerPong(pongTempl: untyped) {.dirty.} =
   let resp = await socket.recvFrom(UDP_MAX_SIZE).withTimeoutEx(TRACKER_TIMEOUT)
   let pong = pongTempl.get(newStringBitStream(resp.data))
+
+template udpTrackerPingPong(pingTempl, pongTempl: untyped) {.dirty.} =
+  udpTrackerPing(pingTempl); udpTrackerPong(pongTempl)
 
 proc udpTrackerHello(tracker: Uri): Future[(AsyncSocket, int64)] {.async.} =
   var socket = newAsyncSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
   let ping = UdpTrackerConnectPing(connection_id: 0x41727101980, action: 0, transaction_id: rand(int32))
-  pingPong(udpTrackerConnectPing, udpTrackerConnectPong)
+  udpTrackerPingPong(udpTrackerConnectPing, udpTrackerConnectPong)
   result = if resp.data.len == 16 and ping.action == pong.action and ping.transaction_id == pong.transaction_id:
     (socket, pong.connection_id) else: (socket, 0'i64)
 
-proc udpTrackerScrape*(infoHashes: string, tracker: Uri): Future[seq[(uint32,uint32,uint32)]] {.async.} =
+proc udpTrackerScrape*(infoHashes: seq[string], tracker: Uri): Future[seq[(uint32,uint32,uint32)]] {.async.} =
   var (socket, connection_id) = await udpTrackerHello(tracker)
   let ping = UdpTrackerScrapePing(connection_id: connection_id, action: 2, transaction_id: rand(int32), info_hashes: infoHashes)
-  pingPong(udpTrackerScrapePing, udpTrackerScrapePong)
+  udpTrackerPingPong(udpTrackerScrapePing, udpTrackerScrapePong)
   result = if ping.action == pong.action and ping.transaction_id == pong.transaction_id:
     pong.info.mapIt((it.complete, it.downloaded, it.incomplete)) else: @[]
+
+template udpTrackerScrape*(infoHash: string, tracker: Uri): Future[seq[(uint32,uint32,uint32)]] = #overload for a single infohash scrape
+  udpTrackerScrape(@[infoHash], tracker)
 
 proc udpTrackerAnnounce*(info_hash: string, tracker: Uri): Future[seq[PeerAddr]] {.async.} =
   var (socket, connection_id) = await udpTrackerHello(tracker) #say hello and return socket and connection id
   let ping = UdpTrackerAnnouncePing(connection_id: connection_id, action: 1, transaction_id: rand(int32), info_hash: info_hash,
     peer_id: peer_id, downloaded: 0, left: 0, uploaded: 0, event: 0, ip: 0, key: rand(uint32), num_want: 10000, port: port, extensions: 0)
-  pingPong(udpTrackerAnnouncePing, udpTrackerAnnouncePong)
+  udpTrackerPingPong(udpTrackerAnnouncePing, udpTrackerAnnouncePong)
   result = if resp.data.len>=20 and ping.action == pong.action and ping.transaction_id == pong.transaction_id:
     pong.peerList.mapIt((ipAddress(it.ip),Port(it.port))) else: @[]
 
@@ -47,8 +54,7 @@ proc udpTrackerAuthPart*(username:string, password: string): string =
   var pass = password.secureHash(); var hash = newString(8)
   copyMem(hash[0].addr, pass.addr, 8)   #todo remove when nim can convert seq[byte] to string https://github.com/nim-lang/Nim/issues/14810
   let ping = UdpTrackerAuth(username_length: username.len.int8, username: username, passwd_hash: hash)
-  var pingStr = newStringBitStream()
-  udpTrackerAuth.put(pingStr, ping); pingStr.setPosition(0)
+  var pingStr = newStringBitStream(); udpTrackerAuth.put(pingStr, ping); pingStr.setPosition(0)
   return pingStr.readAll()
 
 when isMainModule:
@@ -58,6 +64,8 @@ when isMainModule:
   try:
     #echo waitFor udpTrackerAnnounce(parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseUri("udp://9.rarbg.to:2710/announce")) 
     echo waitFor udpTrackerAnnounce(parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseUri("udp://p4p.arenabg.com:1337/announce"))
-    echo waitFor udpTrackerScrape(parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseUri("udp://9.rarbg.to:2710/announce")) 
+    #echo waitFor udpTrackerScrape(@[parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7")], parseUri("udp://9.rarbg.to:2710/announce")) 
+    echo waitFor udpTrackerScrape(@[parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseHexStr("20660e4c00dca794e8722d0ffec402b42094bf80")], parseUri("udp://tracker.opentrackr.org:1337/announce")) 
+
   except CatchableError as e:
     echo e.name
