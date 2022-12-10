@@ -6,6 +6,7 @@
 #todo - implement action=3 - tracker error messages reporting
 #todo - implement extensions1 = authentication. 2 = request string.
 #todo - If no response to a request is received within 15 seconds, resend the request. If no reply has been received after 60 seconds, stop retrying.
+#todo - see if protobuf is a better fit
 
 import net, uri, asyncdispatch, asyncnet, random, strutils, std/[sequtils, sha1]
 import ./types
@@ -30,12 +31,13 @@ proc udpTrackerHello(tracker: Uri): Future[(AsyncSocket, int64)] {.async.} =
   let ping = UdpTrackerConnectPing(connection_id: 0x41727101980, action: 0, transaction_id: rand(int32))
   udpTrackerPingPong(udpTrackerConnectPing, udpTrackerConnectPong)
   result = if resp.data.len == 16 and ping.action == pong.action and ping.transaction_id == pong.transaction_id:
-    (socket, pong.connection_id) else: (socket, 0'i64)
+    (socket, pong.connection_id) else: raise newException(TimeoutError, "Udp tracker ping unsuccessful")
 
 proc udpTrackerScrape*(infoHashes: seq[string], tracker: Uri): Future[seq[(uint32,uint32,uint32)]] {.async.} =
   var (socket, connection_id) = await udpTrackerHello(tracker)
   let ping = UdpTrackerScrapePing(connection_id: connection_id, action: 2, transaction_id: rand(int32), info_hashes: infoHashes)
   udpTrackerPingPong(udpTrackerScrapePing, udpTrackerScrapePong)
+  echo resp.data.len
   result = if ping.action == pong.action and ping.transaction_id == pong.transaction_id:
     pong.info.mapIt((it.complete, it.downloaded, it.incomplete)) else: @[]
 
@@ -66,6 +68,6 @@ when isMainModule:
     echo waitFor udpTrackerAnnounce(parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseUri("udp://p4p.arenabg.com:1337/announce"))
     #echo waitFor udpTrackerScrape(@[parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7")], parseUri("udp://9.rarbg.to:2710/announce")) 
     echo waitFor udpTrackerScrape(@[parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseHexStr("20660e4c00dca794e8722d0ffec402b42094bf80")], parseUri("udp://tracker.opentrackr.org:1337/announce")) 
-
+    echo waitFor udpTrackerScrape(@[parseHexStr("125b77979ba4b183eb702f4ff00df9ff22c452d7"), parseHexStr("20660e4c00dca794e8722d0ffec402b42094bf80")], parseUri("http://tracker1.itzmx.com:8080/announce")) 
   except CatchableError as e:
     echo e.name
