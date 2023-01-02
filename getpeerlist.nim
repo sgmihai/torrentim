@@ -7,9 +7,7 @@ proc getPeerList*(trackerReqUrls: seq[Uri], info_hash: string, timeout = TRACKER
       futs.add(udpTrackerAnnounce(info_hash, tracker))
   for i, f in futs:
     try:
-      echo "we are awaiting tracker " & $i
       result &= await f
     except CatchableError as e:
        echo "we got an exception at fut " & $i & " " & $e.name & $e.msg
     result = result.deduplicate()
-  echo "final result of peerlist is " & $result 
