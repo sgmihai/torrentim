@@ -1,0 +1,11 @@
+const UDP_MAX_SIZE* = 65536
+var TRACKER_TIMEOUT* = 6_000
+var PEER_TIMEOUT* = 6_000
+var max_block_size* = 16384'u32
+#const peer_id* = "-UT1130--dzjx7S4IO!K"
+const PEER_ID* = "-qB4450-dzjx7S4IOm!K"
+const HANDSHAKE_HEADER* = "\19\66\105\116\84\111\114\114\101\110\116\32\112\114\111\116\111\99\111\108\0\0\0\0\0\0\0\0"
+const protoExt* = "\0\0\0\0\0\0\0\0"
+const pstrlen* = 19
+const pstr* = "BitTorrent protocol"
+var port* = 6881'u16
