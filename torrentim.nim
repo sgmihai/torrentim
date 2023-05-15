@@ -1,23 +1,26 @@
 #TODO DHT tracking - steal from here https://github.com/status-im/nim-libp2p-dht
 #TODO encryption http://wiki.vuze.com/w/Message_Stream_Encryption
 #TODO UTP protocol - steal from https://github.com/status-im/nim-eth/tree/master/eth/utp
-#TODO geoip for peers
+#TODO geoip for peers and sort by country distance
 #TODO IPV6 trackers
-#todo support for multiple network interfaces + get external ip for all nics and report all ips to tracker
-#todo basic bittorrent specification
+#TODO support for multiple network interfaces + get external ip for all nics and report all ips to tracker
+#TODO basic bittorrent specification
+#TODO downloading from non seeds, retrying failed pieces, piece verify, seeding, multi file leech/seed
 
-import std/[asyncdispatch, asyncnet, net, httpclient, socketstreams, streams, os, uri, tables, strutils, sequtils, random, sha1, endians, algorithm]
+import std/[asyncdispatch, asyncnet, net, httpclient, socketstreams, streams, os, uri, tables, strutils, sequtils, random, sha1, endians, algorithm, paths]
 import bencode, binarylang, bitvector
 from itertools import chunked #just for "chunked", get rid of it nothing else used
 import comptest
 import timeit
 
 import ./types
-import ./udp_tracker2
-import ./http_tracker
+import ./tracker/udp_tracker2
+import .//tracker/http_tracker
 import ./core
 import ./globals
 import ./peer
+import ./piece
+import ./io
 import protocol/udpTrackerStruct
 
 import terminal
@@ -73,7 +76,7 @@ proc exportTorrent*(files: seq[TorrentFile], name: string, piece_len: uint, piec
   if files.len > 1:
     infoDict["files"] = be( files.mapIt( be({
       "length": be(it.size.int),
-      "path": be(it.path.split("/").mapIt(be(it)))
+      "path": be(it.path.string.split(DirSep).mapIt(be(it)))
     })) )
   elif files.len == 1: infoDict["length"] = be(files[0].size.int) 
   infoDict["name"] = be(name)
@@ -121,13 +124,13 @@ proc init*(_: typedesc[Torrent], torrentBytes: string, src: Uri): Future[Torrent
   if tDict.d["info"].d.hasKey("files"):
     var curOffset = 0'u
     for file in tDict.d["info"].d["files"].l:
-      let path = file.d["path"].l[0..^1].mapIt(it.s).join("/")
+      let path = file.d["path"].l[0..^1].mapIt(it.s).join($DirSep)
       let size = file.d["length"].i.uint
-      t.files.add(TorrentFile(path: path, offset: curOffset, size: size))
+      t.files.add(TorrentFile(path: path.Path, offset: curOffset, size: size))
       curOffset += size
     t.size = t.files[^1].offset + t.files[^1].size
   else:
-    t.files.add(TorrentFile(path: tDict.d["info"].d["name"].s, offset: 0'u, size: tDict.d["info"].d["length"].i.uint))
+    t.files.add(TorrentFile(path: tDict.d["info"].d["name"].s.Path, offset: 0'u, size: tDict.d["info"].d["length"].i.uint))
     t.size = tDict.d["info"].d["length"].i.uint
   t.name = tDict.d["info"].d["name"].s
   t.numPieces = t.size div t.pieceSize + (t.size mod t.pieceSize != 0).uint
@@ -156,21 +159,15 @@ proc init*(_: typedesc[Torrent], torrentBytes: string, src: Uri): Future[Torrent
     if not (key in ["files", "length", "name", "piece length","pieces", "private"]):
       t.optFields.add((key, val))
 
-
-  t.pcsHave = newBitVector[uint](t.numPieces.int)
-  t.pcsWant = newBitVector[uint](t.numPieces.int, init = 1)
-  t.pcsActive = newBitVector[uint](t.numPieces.int)
-
-  t.blkHave = newBitVector[uint](t.numBlocks.int)
-  t.blkWant = newBitVector[uint](t.numBlocks.int, init = 1)
-  t.blkActive = newBitVector[uint](t.numBlocks.int)
-
-  t.blkRequester = dispatchClosure(t)
+  #[echo "total size " & $t.size
   echo "blocks number " & $t.numBlocks
-  let x = readLine(stdin)
-  
+  echo "piece number " & $t.numPieces
+  echo "piece size " & $t.pieceSize
+  let x = readLine(stdin)]#
+
+  #echo readBlock((0.uint, 0.uint, 16308.uint), t)
+
   m.finish()
-  await t.updatePeerList() #this needs to be moved someplace else, torrent manager, to not block torrent creation
   return t
 
 proc startPeers(t: Torrent) {.async.} =
@@ -180,17 +177,41 @@ proc startPeers(t: Torrent) {.async.} =
     futs.add(t.conns[^1].peerLoop(t))
   await all futs
 
+proc startTorrent(t: Torrent) {.async.} =
+
+  t.pcsHave = newBitVector[uint](t.numPieces.int)
+  t.pcsWant = newBitVector[uint](t.numPieces.int, init = 1)
+  t.pcsActive = newBitVector[uint](t.numPieces.int)
+
+  t.blkHave = newBitVector[uint](t.numBlocks.int)
+  t.blkWant = newBitVector[uint](t.numBlocks.int, init = 1)
+  t.blkActive = newBitVector[uint](t.numBlocks.int)
+
+  t.filesWanted = newBitVector[uint](t.numBlocks.int, init = 1)
+
+  t.blkRequester = dispatchClosure(t)
+  t.basePath = absolutePath("dl".Path / t.name.Path)
+  discard existsOrCreateDir(t.basePath.string)  
+
+  waitFor t.makeEmptyFiles()
+  waitFor t.updatePeerList()
+  waitFor startPeers(t)
+
+
 when isMainModule:
     var my_ip = waitFor getMyIp()
     var myTorrent: Torrent
     if paramCount() == 0:
-      #myTorrent = waitFor Torrent.init(parseUri("file:///home/sgm/Downloads/PostmarketOS V21.12 Phosh 17 Pine64 Pinetab Allwinner 20220420 IMG XZ.torrent"))
-      myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/debian-11.6.0-amd64-netinst.iso.torrent")))
+      #myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/bittorrent-v2-hybrid-test.torrent")))
+      #myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/debian-11.6.0-amd64-netinst.iso.torrent")))
+      myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/Teslagrad Remastered [FitGirl Repack].torrent")))
+      
     else:
       myTorrent = waitFor Torrent.init(parseUri(paramStr(1)))
-    writeFile("cats.txt", exportTorrent(myTorrent)) 
+    #writeFile("cats.txt", exportTorrent(myTorrent)) 
     let x = readLine(stdin)
     echo "peerlist len will be " & $myTorrent.peerList.len
     echo "peerlist is " & $myTorrent.peerList
     randomize()
-    waitFor startPeers(myTorrent)
+    waitFor startTorrent(myTorrent)
+    

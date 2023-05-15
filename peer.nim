@@ -1,15 +1,18 @@
 import asyncdispatch, net, asyncnet, asyncfile, binarylang, os, terminal
+import std/sha1 #for check piece, maybe move somewhere else
 import bitvector
 import ./types
 import ./globals
 import ./core
+import ./piece
+import ./io
 include protocol/peerMessageStruct
 
-import strutils #just for tohex debuggin
+import morelogging #just for debug
 
 import timeit
 
-export types.Peer
+export types.Peer #why?
 
 proc pChoked*(self: Peer, state: bool) = self.choking = state; echo "peer choked us = " & $state
 proc pInterested*(self: Peer, state: bool) = self.interested = state; echo "peer interest in us = " & $state
@@ -21,7 +24,7 @@ proc psChoked*(self: Peer, state: bool) {.async.} =
    let msgStr = int2msg(1'u32) & chr(1-ord(state))
    await self.asocket.send(msgStr)
 
-proc pReqPiece*(self: Peer, blk: BlockReqInfo) {.async.} = #request: <len=0013><id=6><index><begin><length>
+proc pReqPiece*(self: Peer, blk: BlockInfo) {.async.} = #request: <len=0013><id=6><index><begin><length>
   let reqS = int2msg(13'u32) & "\6" & int2msg(blk.pieceN.uint32) & int2msg(blk.offset.uint32) & int2msg(blk.len.uint32)
   await self.asocket.send(reqS)
  # echo "sent request for piece " & $pieceN
@@ -75,22 +78,27 @@ proc peerConnect*(ip: IpAddress, port: Port): Future[AsyncSocket] {.async.} =
   return socket
 
 proc peerProcessBlock*(self: Peer, t: Torrent, msg: PeerMessage, chunk:string) {.async.} =
+
+  await writeBlock((msg.payl.indexP.uint, msg.payl.beginP.uint, chunk.len.uint), chunk, t)
+
   #writeFile("test/chunks/" & $msg.payl.indexP & " " & $msg.payl.beginP & " " & $msg.payl.chunk.len & ".block", $msg.len & $msg.id & $msg.payl.indexP & $msg.payl.beginP & msg.payl.chunk)
-  var file: File
-  let fileName = "test/chunks/file.bin"
-  if not fileExists(fileName):
+  #var file: AsyncFile
+  #let fileName = "test/chunks/file.bin"
+  #  var file = openAsync(getTempDir() / "foobar.txt", fmReadWrite)
+ #[ if not fileExists(fileName):
     writeFile(fileName, "")
-    discard file.open(fileName, fmReadWriteExisting)
+    var file = openAsync(fileName, fmReadWriteExisting)
+    #await file.write("")
     file.setFilePos(t.size.int64 - 1)
-    file.write("\0")
+    await file.write("\0")
     file.close()
   
   if fileExists(fileName):
-    if file.open(fileName, fmReadWriteExisting):
-      let offset = msg.payl.indexP.uint * t.pieceSize + msg.payl.beginP.uint
-      file.setFilePos(offset.int64)
-      file.write(chunk)
-      file.close()
+    var file = openAsync(fileName, fmReadWriteExisting)
+    let offset = msg.payl.indexP.uint * t.pieceSize + msg.payl.beginP.uint
+    file.setFilePos(offset.int64)
+    await file.write(chunk)
+    file.close()]#
 
 #hack - BitVector.Base is not exported, I modified the file manually to export it. See if there is any workaround to this.
 proc initBitField(aPeer: Peer, bitField: string) =
@@ -100,10 +108,16 @@ proc initBitField(aPeer: Peer, bitField: string) =
 proc setBitInField(bitField: var BitVector, n: int, value = 1) =
   bitField[n] = value
 
-func isValidBlockRange(pSize, numPieces:uint, blk: BlockReqInfo): bool =
-  blk.pieceN.int in (0..numPieces.int) and (blk.offset + blk.len <= pSize.uint)
+func hasWantedPieces(peer, want, have: BitVector): bool =
+  if peer.len != want.len: return false
+  for i in 0..want.len - 1:
+    if want[i].bool: (if not have[i].bool: (if peer[i].bool: return true)) #if we actually want to download that piece and don't already have it, and if remote peer has it
+  return false
 
-proc sendBlock(peer: Peer, t: Torrent, blk: BlockReqInfo) =
+func hasWantedPieces(peer: Peer, t: Torrent): bool =
+  return hasWantedPieces(peer.bitField, t.pcsWant, t.pcsHave)
+
+proc sendBlock(peer: Peer, t: Torrent, blk: BlockInfo) =
   if isValidBlockRange(t.pieceSize, t.numPieces, blk):
     #if t.blkHave[blk.p].bool:
     
@@ -112,33 +126,44 @@ proc sendBlock(peer: Peer, t: Torrent, blk: BlockReqInfo) =
   #get data, with exception
   #send piece
 
-func hasPiece(p: Peer, pc: PieceNum): bool =
-  return p.bitField[pc.int].bool
+proc hasPiece(p: Peer, pieceIdx: PieceNum): bool = #TODO turn this into a template
+  return p.bitField[pieceIdx.int].bool
 
-func block2BlockReq(blkNum, pieceSize, numBlocks, max_block_size, size: uint): BlockReqInfo =
-  result = ((blkNum*max_block_size div pieceSize).uint,
-           (blkNum*max_block_size mod pieceSize).uint,
-           if blkNum != numBlocks-1: max_block_size.uint else: (size - blkNum*max_block_size).uint)
+func isBitFieldAll1s(x: BitVector): bool = #TODO rewrite so that is compares chunks of Base instead of individual bits, for speed
+  for i in 0..x.len-1:
+    if x[i] == 0: return false
+  return true
 
-proc dispatchClosure*(t:Torrent): BlockRequester =
-  iterator dispatch(): BlockReqInfo {.closure.} =
-    for i in 0..(t.numBlocks-1).int:
-      if t.blkHave[i] == 0 and t.blkWant[i] == 1 and t.blkActive[i] == 0:
-        t.blkActive[i] = 1
-        yield block2BlockReq(i.uint, t.pieceSize, t.numBlocks, max_block_size.uint, t.size)
-  result = dispatch
+template isLeech(p: Peer): bool =
+  not p.bitField.isBitFieldAll1s()
+
+template isSeed(p: Peer): bool =
+  p.bitField.isBitFieldAll1s()
+
+func howManyBitsInField(x: BitVector, bit:int = 1): int =
+  for i in 0 .. x.len-1:
+    if x[i] == bit:
+      inc result
+
+template peerHello(peer: Peer, infohash: InfoHash) =
+  try:
+    await peerConnect(peer)
+    await peerSayHello(peer, infohash, PEER_ID)
+    await peerHearHello(peer, infohash)
+  except: echo "we got an exception establishing peer connection: "
 
 proc peerLoop*(peer: Peer, t: Torrent) {.async.} =
   echo peer.host.ip
-  try:
-    await peerConnect(peer)
-    await peerSayHello(peer, t.sha1, PEER_ID)
-    await peerHearHello(peer, t.sha1)
-  except: echo "we got an exception establishing peer connection: "
+  peerHello(peer, t.sha1)
   #await psChoked(peer, false)
-  await psInterested(peer, true)
-  var file = openAsync(getTempDir() / "foobar.txt", fmReadWrite)
+  #while true:
+  #  if peer.hasWantedPieces(t): await psInterested(peer, true); break
+   # else: await sleepAsync(10000)
+    
   #warning, this loop logic won't work if peer doesn't send us bitfield msg after handshake, which is optional (probably not so in practice unless peer has no pieces to begin with)
+  peer.maxRequests = 5
+  peer.bitField = newBitVector[uint](t.numPieces.int) #avoid errors in case we don't have bitfield received/initialized
+  var whatmax = 0
   while true:
     var msgSize = await peer.asocket.recv(4)
     case msg2int(msgSize):
@@ -153,33 +178,35 @@ proc peerLoop*(peer: Peer, t: Torrent) {.async.} =
     #echo resp
     #writeFile($resp[5..8].msg2Int & $resp[9..12].msg2Int&".pkt", resp[13..^1])
     var bistr = newStringBitStream(msgSize & resp)
-    let bistr2 = newStringBitStream(msgSize & resp)
-    let alldata = readAll(bistr2)
     #echo "all data that would have been passed to parser is len: " & $alldata.len
     let peerMsg = peerMessage.get(bistr)
     let msgLen = peerMsg.len
-    #echo "msg len in struct is " & $peerMsg.len
-    #let msgLen = msg2int(await aPeer.asocket.recv(4))    if msgLen == -1: echo "peer disconnected"; return #if msglen is -1 then the received string from the socket is empty, which means disconnect
-    #echo "got a message of length " & $msgLen
-    #let reply = resp
     let msgType = peerMsg.id#reply[0].uint8
     case msgType: #todo - look into "define a sequence of procs in an array, and call the one with the index of msgType directly; so that I can do, on msgReceive: msgHandle[msgType]
       of 0: pChoked(peer, true) #choke: <len=0001><id=0>
       of 1: pChoked(peer, false)#unchoke: <len=0001><id=1> ; await psChoked(aPeer, false); await psInterested(aPeer, true)
       of 2: pInterested(peer, true) #interested: <len=0001><id=2>
       of 3: pInterested(peer, false) #not interested: <len=0001><id=3>
-      of 4: setBitInField(peer.bitField, peerMsg.payl.pieceIndex) #have: <len=0005><id=4><piece index>
-      of 5: initBitField(peer, peerMsg.payl.bitField) #bitfield: <len=0001+X><id=5><bitfield>
+      of 4:
+        echo "debug pieceIndex for havePiece msg " & peer.peer_id & " " & $peerMsg.payl.pieceIndex & " len of bitfield " & $peer.bitField.len
+        setBitInField(peer.bitField, peerMsg.payl.pieceIndex) #have: <len=0005><id=4><piece index>
+      of 5:
+        initBitField(peer, peerMsg.payl.bitField)
+        echo "debug bitfield len " & $peer.bitfield.len & " has 0s " & $howManyBitsInField(peer.bitfield,0) #bitfield: <len=0001+X><id=5><bitfield>
       of 6: sendBlock(peer, t, (pieceN: peerMsg.payl.indexR.uint, offset:peerMsg.payl.beginR.uint, len:peerMsg.payl.lengthR.uint)) #request: <len=0013><id=6><index><begin><length>
-      of 7: await peerProcessBlock(peer, t, peerMsg, resp[9..^1]) #piece: <len=0009+X><id=7><index><begin><block>  #debug for writing wire packets to disk: writeFile(absolutePath("./test/pkts/") & $(resp[1..4].msg2Int) & $(resp[5..8].msg2Int)&".pkt", resp[9..^1])
+      of 7:
+        dec peer.requests; await peerProcessBlock(peer, t, peerMsg, resp[9..^1]) #piece: <len=0009+X><id=7><index><begin><block>  #debug for writing wire packets to disk: writeFile(absolutePath("./test/pkts/") & $(resp[1..4].msg2Int) & $(resp[5..8].msg2Int)&".pkt", resp[9..^1])
       of 8: echo "we got a cancel" #cancel: <len=0013><id=8><index><begin><length>
       of 9: echo "port" #port: <len=0003><id=9><listen-port>
       else: discard
     if not peer.choking:
-      let blkInfo = t.blkRequester()
-      if (blkInfo.len > 0) and peer.hasPiece(blkInfo.PieceNum):
-        discard #t.blkActive[] #todo: iterator could return block index instead of recalculatig it here
-        await pReqPiece(peer, blkInfo)
-      else: await sleepAsync(1000)
-
+      if peer.isSeed: #only download from seeds until logic is fixed
+        let blkInfo = t.blkRequester()
+        if (blkInfo.len > 0) and (peer.requests < peer.maxRequests): #and peer.hasPiece(blkInfo.PieceNum)
+          discard #t.blkActive[] #todo: iterator could return block index instead of recalculatig it here
+          inc peer.requests
+          if (peer.requests > whatmax): (whatmax = peer.requests)
+          asyncCheck pReqPiece(peer, blkInfo)
+        else: await sleepAsync(0)
+  echo peer.peer_id & " " & $whatmax
       #pcNum * pcsize blkid

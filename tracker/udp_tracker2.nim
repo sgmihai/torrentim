@@ -15,10 +15,10 @@
 #todo - ipv6 tracker
 
 import net, uri, asyncdispatch, asyncnet, random, strutils, std/[sequtils, sha1]
-import ./types
-import ./core
-import ./globals
-include protocol/udpTrackerStruct
+import ../types
+import ../core
+import ../globals
+include ../protocol/udpTrackerStruct
 import binarylang
 
 template udpTrackerPing(pingTempl: untyped) {.dirty.} =

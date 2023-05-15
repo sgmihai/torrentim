@@ -15,13 +15,10 @@ proc getMyIp*(): Future[string] {.async.} =
   const myIpUrls = ["ipecho.net/plain","ipinfo.io/ip","api.ipify.org","ifconfig.me","icanhazip.com"]
   return await newAsyncHttpClient().getContent("https://" & myIpUrls[0])
 
-proc ipAddress*(a: int32): IpAddress =
-  ## Creates IPv4 address from 32-bit integer.
-  echo "ip addr value before convert " & $a
+proc ipAddress*(a: int32): IpAddress = ## Creates IPv4 address from 32-bit integer.
   var ip: array[0..3, uint8]
   copyMem(addr ip, a.unsafeAddr, 4)
   result = IpAddress(family: IpAddressFamily.IPv4, address_v4: ip)
-  echo "ip addr value after convert " & $cast[int32](result.address_v4)
 #func msg2byteGeneric*[T](s: string): T =
 #  case s.len:
 #    of 2: swapEndian16(addr result, unsafeaddr s[0])

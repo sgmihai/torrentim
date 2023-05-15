@@ -2,9 +2,9 @@
 
 import uri, net, asyncdispatch, httpclient, tables, sequtils, strutils
 import bencode
-import ./types
-import ./core
-import ./globals
+import ../types
+import ../core
+import ../globals
 
 proc getHttpScrapeUrl(announceUrl: Uri): Uri =
   let url = $announceUrl
