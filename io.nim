@@ -7,7 +7,7 @@ template writeFileForced(file: Path) =
   discard existsOrCreateDir(file.parentDir.string)
   writeFile(file.string, "")
 
-proc relPaths2Absolute*(paths: seq[Path], basePath: Path): seq[Path] = #todo turn into func
+func relPaths2Absolute*(paths: seq[Path], basePath: Path): seq[Path] =
   result = paths.mapIt(it.absolutePath(basePath))
 
 proc makeEmptyFiles*(files: seq[TorrentFile], basePath: Path) {.async.} =

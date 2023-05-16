@@ -179,15 +179,18 @@ proc startPeers(t: Torrent) {.async.} =
 
 proc startTorrent(t: Torrent) {.async.} =
 
-  t.pcsHave = newBitVector[uint](t.numPieces.int)
-  t.pcsWant = newBitVector[uint](t.numPieces.int, init = 1)
-  t.pcsActive = newBitVector[uint](t.numPieces.int)
+  t.filesWanted = newBitVector[uint](t.numBlocks.int, init = 1)
 
   t.blkHave = newBitVector[uint](t.numBlocks.int)
   t.blkWant = newBitVector[uint](t.numBlocks.int, init = 1)
   t.blkActive = newBitVector[uint](t.numBlocks.int)
 
-  t.filesWanted = newBitVector[uint](t.numBlocks.int, init = 1)
+  t.pcsHave = newBitVector[uint](t.numPieces.int)
+#  t.pcsWant = newBitVector[uint](t.numPieces.int, init = 1)
+  #t.pcsWant = files2PieceMap(t.files, t.filesWanted, t.pieceSize, t.numPieces)
+  t.pcsWant = files2PieceMap(t)
+  t.pcsActive = newBitVector[uint](t.numPieces.int)
+
 
   t.blkRequester = dispatchClosure(t)
   t.basePath = absolutePath("dl".Path / t.name.Path)
@@ -210,8 +213,6 @@ when isMainModule:
       myTorrent = waitFor Torrent.init(parseUri(paramStr(1)))
     #writeFile("cats.txt", exportTorrent(myTorrent)) 
     let x = readLine(stdin)
-    echo "peerlist len will be " & $myTorrent.peerList.len
-    echo "peerlist is " & $myTorrent.peerList
     randomize()
     waitFor startTorrent(myTorrent)
     

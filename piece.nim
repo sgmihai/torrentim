@@ -2,15 +2,22 @@ import std/[sha1, os, sequtils, paths]
 import bitvector
 import ./types
 import ./globals
-#import ./io
 
 #get block request -> sendBlock.block2Data(piece, t) -> fileSlices2bytes (block2FileSlices, relPaths2Absolute(slices filesmapped to paths))
 #get block message -> writeBlock(blockInfo, blockData) -> block2FileSlices
 
-#await peerProcessBlock(t, peerMsg, resp[9..^1]) 
-#await peerProcessBlock( (msg.payl.indexP, msg.payl.beginP, msg.payl.chunk.len), msg.payl.chunk)
+func files2PiecesMap*(t: Torrent): BitVector =
+  files2PiecesMap(t.files, t.filesWanted, t.pieceSize, t.numPieces)
 
-#converts a raw block index (considering all the torrent is made of blocks) into BlockInfo (pieceIdx, offset, len)
+func files2PieceMap*(files: seq[TorrentFile], filesWanted: BitVector, pieceSize, pieceCount:uint): BitVector =
+  var pieceMap = newBitVector[uint](pieceCount.int) 
+  for i in 0..filesWanted.len - 1:
+    if filesWanted[i].bool:
+      let startPiece = files[i].offset - 1 div pieceSize
+      let endPiece = files[i].offset + files[i].size div pieceSize
+      pieceMap[startPiece.int..endPiece.int] = 1
+  return pieceMap
+
 
 
 func blockInfo2Range(blk: BlockInfo, pieceSize: uint): BlockRange =
@@ -18,6 +25,7 @@ func blockInfo2Range(blk: BlockInfo, pieceSize: uint): BlockRange =
   let ePos = iPos + blk.len
   return (iPos, ePos)
 
+#converts a raw block index (considering all the torrent is made of blocks) into BlockInfo (pieceIdx, offset, len)
 func blkNum2BlockInfo*(blkNum, pieceSize, numBlocks, max_block_size, size: uint): BlockInfo =
   ((blkNum*max_block_size div pieceSize).uint,
    (blkNum*max_block_size mod pieceSize).uint,
@@ -110,26 +118,3 @@ while mid < len(files):
 
 # Return the file offsets and lengths
 return file_offsets, file_lengths]#
-
-
-
-#[
-proc peerProcessBlock*(self: Peer, t: Torrent, msg: PeerMessage, chunk:string) {.async.} =
-  #writeFile("test/chunks/" & $msg.payl.indexP & " " & $msg.payl.beginP & " " & $msg.payl.chunk.len & ".block", $msg.len & $msg.id & $msg.payl.indexP & $msg.payl.beginP & msg.payl.chunk)
-  #var file: AsyncFile
-  let fileName = "test/chunks/file.bin"
-  #  var file = openAsync(getTempDir() / "foobar.txt", fmReadWrite)
-  if not fileExists(fileName):
-    writeFile(fileName, "")
-    var file = openAsync(fileName, fmReadWriteExisting)
-    #await file.write("")
-    file.setFilePos(t.size.int64 - 1)
-    await file.write("\0")
-    file.close()
-  
-  if fileExists(fileName):
-    var file = openAsync(fileName, fmReadWriteExisting)
-    let offset = msg.payl.indexP.uint * t.pieceSize + msg.payl.beginP.uint
-    file.setFilePos(offset.int64)
-    await file.write(chunk)
-    file.close()]#
