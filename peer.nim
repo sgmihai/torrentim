@@ -161,7 +161,7 @@ proc peerLoop*(peer: Peer, t: Torrent) {.async.} =
    # else: await sleepAsync(10000)
     
   #warning, this loop logic won't work if peer doesn't send us bitfield msg after handshake, which is optional (probably not so in practice unless peer has no pieces to begin with)
-  peer.maxRequests = 5
+  peer.maxRequests = 1
   peer.bitField = newBitVector[uint](t.numPieces.int) #avoid errors in case we don't have bitfield received/initialized
   var whatmax = 0
   while true:

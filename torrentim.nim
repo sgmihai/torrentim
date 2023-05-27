@@ -107,17 +107,15 @@ proc init*(_: typedesc[Torrent], src: Uri): Future[Torrent] {.async.} =
     torrentBytes = readFile(($src)[7..^1])
   else:
     torrentBytes = await newAsyncHttpClient().getContent(src)
-  return await Torrent.init(torrentBytes, src)
+  return Torrent.parse(torrentBytes, src)
 
-proc init*(_: typedesc[Torrent], torrentBytes: string, src: Uri): Future[Torrent] {.async.} =
+proc parse*(_: typedesc[Torrent], torrentBytes: string, src: Uri = parseUri("")): Torrent =
   var m = monit("first"); m.start()
   var t = result; t = new Torrent #t gets assigned result, which of type Torrent (ref), thus shares the same address with it
   t.sourceUri = src
   var tDict = bdecode(torrentBytes) #decoded torrent benc node tree structure
 
   t.sha1 = tDict.d["info"].bencode().secureHash()
-  #echo repr(sha
-  #t.sha1 = newString(20); copyMem(t.sha1[0].addr, sha1.unsafeAddr, 20); #todo remove when nim can convert array[uint8] to string https://github.com/nim-lang/Nim/issues/14810
   t.sha1hex = t.sha1.toHex()
   t.pieceSize = tDict.d["info"].d["piece length"].i.uint
 
@@ -132,9 +130,11 @@ proc init*(_: typedesc[Torrent], torrentBytes: string, src: Uri): Future[Torrent
   else:
     t.files.add(TorrentFile(path: tDict.d["info"].d["name"].s.Path, offset: 0'u, size: tDict.d["info"].d["length"].i.uint))
     t.size = tDict.d["info"].d["length"].i.uint
+    
   t.name = tDict.d["info"].d["name"].s
   t.numPieces = t.size div t.pieceSize + (t.size mod t.pieceSize != 0).uint
   t.numBlocks = t.size div max_block_size + (t.size mod max_block_size != 0).uint
+  t.numFiles = t.files.len.uint
   t.pcsHashes = collect(for x in tDict.d["info"].d["pieces"].s.chunked(20): x.join(""))
   assert t.numPieces == t.pcsHashes.len.uint
   t.webSeedUrls = if tDict.d.hasKey("url-list"): tDict.d["url-list"].l.mapIt(parseUri(it.s)) else: @[]
@@ -159,12 +159,6 @@ proc init*(_: typedesc[Torrent], torrentBytes: string, src: Uri): Future[Torrent
     if not (key in ["files", "length", "name", "piece length","pieces", "private"]):
       t.optFields.add((key, val))
 
-  #[echo "total size " & $t.size
-  echo "blocks number " & $t.numBlocks
-  echo "piece number " & $t.numPieces
-  echo "piece size " & $t.pieceSize
-  let x = readLine(stdin)]#
-
   #echo readBlock((0.uint, 0.uint, 16308.uint), t)
 
   m.finish()
@@ -178,8 +172,10 @@ proc startPeers(t: Torrent) {.async.} =
   await all futs
 
 proc startTorrent(t: Torrent) {.async.} =
-
-  t.filesWanted = newBitVector[uint](t.numBlocks.int, init = 1)
+  echo "how many pieces in torrent " & $t.pcsHashes.len
+  echo "how many files in torrent " & $t.files.len
+  t.filesWanted = newBitVector[uint](t.files.len.int, init = 1)
+  echo "how many files wanted in torrent " & $t.filesWanted.len
 
   t.blkHave = newBitVector[uint](t.numBlocks.int)
   t.blkWant = newBitVector[uint](t.numBlocks.int, init = 1)
@@ -206,8 +202,8 @@ when isMainModule:
     var myTorrent: Torrent
     if paramCount() == 0:
       #myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/bittorrent-v2-hybrid-test.torrent")))
-      #myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/debian-11.6.0-amd64-netinst.iso.torrent")))
-      myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/Teslagrad Remastered [FitGirl Repack].torrent")))
+      myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/debian-11.6.0-amd64-netinst.iso.torrent")))
+      #myTorrent = waitFor Torrent.init(parseUri("file://" & absolutePath("./test/Teslagrad Remastered [FitGirl Repack].torrent")))
       
     else:
       myTorrent = waitFor Torrent.init(parseUri(paramStr(1)))

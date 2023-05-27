@@ -6,18 +6,24 @@ import ./globals
 #get block request -> sendBlock.block2Data(piece, t) -> fileSlices2bytes (block2FileSlices, relPaths2Absolute(slices filesmapped to paths))
 #get block message -> writeBlock(blockInfo, blockData) -> block2FileSlices
 
-func files2PiecesMap*(t: Torrent): BitVector =
-  files2PiecesMap(t.files, t.filesWanted, t.pieceSize, t.numPieces)
-
-func files2PieceMap*(files: seq[TorrentFile], filesWanted: BitVector, pieceSize, pieceCount:uint): BitVector =
+proc files2PieceMap*(files: seq[TorrentFile], filesWanted: BitVector, pieceSize, pieceCount:uint): BitVector[uint] =
   var pieceMap = newBitVector[uint](pieceCount.int) 
-  for i in 0..filesWanted.len - 1:
+  echo "files wanted num " & $filesWanted.len
+  for i in 0..files.len - 1:
     if filesWanted[i].bool:
-      let startPiece = files[i].offset - 1 div pieceSize
-      let endPiece = files[i].offset + files[i].size div pieceSize
-      pieceMap[startPiece.int..endPiece.int] = 1
+      let startPiece = (files[i].offset.int - 1) div pieceSize.int
+      let endPiece = ((files[i].offset + files[i].size) div pieceSize).int
+      #echo "piece size " & $pieceSize
+      #echo "debug " & $startPiece & " " & $endPiece & " offset " & $files[i].offset & " offs+size " & $(files[i].offset + files[i].size)
+      if endPiece - startPiece < (uint.sizeof * 8): #bitVector only supports baseSize * 8 bits slices
+        pieceMap[startPiece.int..endPiece.int] = 1
+      else:
+        for idx in startPiece..endPiece:
+          pieceMap[idx] = 1
   return pieceMap
 
+proc files2PieceMap*(t: Torrent): BitVector[uint]=
+  files2PieceMap(t.files, t.filesWanted, t.pieceSize, t.numPieces)
 
 
 func blockInfo2Range(blk: BlockInfo, pieceSize: uint): BlockRange =

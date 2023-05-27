@@ -8,7 +8,7 @@ license         = "idk whatever"
 
 
 #Dependencies
-
+requires "nim >= 1.9.3"
 requires "https://github.com/z-------------/nim-bencode#head"
 requires "binarylang"
 requires "bitvector"

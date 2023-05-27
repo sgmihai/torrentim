@@ -13,12 +13,10 @@ proc getHttpScrapeUrl(announceUrl: Uri): Uri =
 
 proc httpTrackerAnnounce*(info_hash: string, tracker: Uri, params: httpAnnounceParams = @[]): Future[seq[PeerAddr]] {.async.} =
   let anDec = bdecode await newAsyncHttpClient().getContent(tracker ? (toSeq(tracker.query.decodeQuery()) & params)).withTimeoutEx(TRACKER_TIMEOUT) #FIXME once https://github.com/nim-lang/Nim/issues/19782
-  echo $tracker & " got " & $anDec
   if anDec.d.hasKey("peers"): #if we get bencoded peerlist format, or compact format
     result = if anDec.d["peers"].kind == bkList: anDec.d["peers"].l.mapIt((parseIpAddress(it.d["ip"].s), it.d["port"].i.Port))
   elif anDec.d["peers"].kind == bkStr: anDec.d["peers"].s.parseBinlangPeerList() else: @[]
   if anDec.d["peers"].kind == bkStr: echo "we have string/compact peers" elif anDec.d["peers"].kind == bkList: echo "we have bencoded"
-  echo "result is " & $result
 
 template httpTrackerScrape*(infoHash: string, tracker: Uri): Future[seq[(uint32,uint32,uint32)]] =
   httpTrackerScrape(@[infoHash], tracker)
@@ -33,7 +31,7 @@ when isMainModule:
   discard
   let my_ip = waitFor getMyIp()
   let hash = parseHexStr("aad00c145cfecb4990de397c9ac4239909accc48")
-  let url = parseUri("http://reactor.filelist.io//announce") ? {"info_hash": hash, "peer_id": PEER_ID,  "ip": my_ip, "port": $port, "downloaded": "0",
+  let url = parseUri("http://reactor.filelist.io/8c7f355bbddbf8193dce2cf92e84b6ae/announce") ? {"info_hash": hash, "peer_id": PEER_ID,  "ip": my_ip, "port": $port, "downloaded": "0",
     "uploaded": "0", "left": "0", "event": "started", "compact": "1", "numwant": "200", }
   echo waitFor httpTrackerAnnounce(hash, url)
   #echo getHttpScrapeUrl(parseUri("https://tracker.nanoha.org:443/announce"))
