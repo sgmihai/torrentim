@@ -1,4 +1,5 @@
 import asyncdispatch, net, asyncnet, asyncfile, binarylang, os, terminal
+import std/importutils
 import std/sha1 #for check piece, maybe move somewhere else
 import bitvector
 import ./types
@@ -8,7 +9,7 @@ import ./piece
 import ./io
 include protocol/peerMessageStruct
 
-import morelogging #just for debug
+when (compiles do: import morelogging): discard
 
 import timeit
 
@@ -100,8 +101,8 @@ proc peerProcessBlock*(self: Peer, t: Torrent, msg: PeerMessage, chunk:string) {
     await file.write(chunk)
     file.close()]#
 
-#hack - BitVector.Base is not exported, I modified the file manually to export it. See if there is any workaround to this.
 proc initBitField(aPeer: Peer, bitField: string) =
+  privateAccess(BitVector)
   aPeer.bitField = newBitVector[uint](bitField.len*8)
   copyMem(aPeer.bitField.Base[0].addr, bitField[0].unsafeAddr, bitField.len)
 

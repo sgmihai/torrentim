@@ -14,5 +14,3 @@ requires "binarylang"
 requires "bitvector"
 requires "itertools"
 requires "https://github.com/ringabout/timeit#head"
-
-#also requires .nimble/pkgs/BitVector-0.4.11/bitvector.nim, Base field to be made public
