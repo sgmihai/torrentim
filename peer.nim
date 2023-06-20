@@ -9,7 +9,7 @@ import ./piece
 import ./io
 include protocol/peerMessageStruct
 
-when (compiles do: import morelogging): discard
+when (compiles do: import morelogging): discard # just for debug
 
 import timeit
 
